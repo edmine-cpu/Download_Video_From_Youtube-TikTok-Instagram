@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
@@ -15,6 +16,8 @@ from aiogram.types import (
 	InlineKeyboardMarkup,
 	Message,
 )
+from yt_dlp.utils import DownloadError
+
 from bot.settings import settings
 from bot.utils.temp_video import TempVideo
 from bot.utils.downloader import (
@@ -35,6 +38,7 @@ DOWNLOAD_URL_TTL_SECONDS = 15 * 60
 TELEGRAM_AUDIO_MAX_BYTES = 50 * 1024 * 1024
 TELEGRAM_VIDEO_MAX_BYTES = 50 * 1024 * 1024
 DOWNLOAD_WORKERS = 2
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -306,11 +310,17 @@ async def download_video(
 		return
 
 	try:
-		downloaded_video = await run_download_in_thread(
-			download_video_util,
-			url,
-			max_height=max_height,
-		)
+		try:
+			downloaded_video = await run_download_in_thread(
+				download_video_util,
+				url,
+				max_height=max_height,
+			)
+		except DownloadError:
+			logger.exception("yt-dlp failed to download video: %s", url)
+			await message.answer(messages["DOWNLOAD_FAILED"])
+			return
+
 		video_path = Path(downloaded_video.path)
 		if video_path.stat().st_size > TELEGRAM_VIDEO_MAX_BYTES:
 			link = create_public_download_link(video_path)
@@ -345,7 +355,13 @@ async def download_audio(url: str, message: Message, status_message: Message | N
 		return
 
 	try:
-		downloaded_audio = await run_download_in_thread(download_audio_util, url)
+		try:
+			downloaded_audio = await run_download_in_thread(download_audio_util, url)
+		except DownloadError:
+			logger.exception("yt-dlp failed to download audio: %s", url)
+			await message.answer(messages["DOWNLOAD_FAILED"])
+			return
+
 		async with TempVideo(downloaded_audio.path) as path:
 			if path.stat().st_size > TELEGRAM_AUDIO_MAX_BYTES:
 				await message.answer(messages["AUDIO_TOO_LARGE"])
