@@ -7,9 +7,15 @@ from handlers.constants.messages import messages
 
 async def download_video(url: str, message: Message):
 	if validators.url(url):
-		path = download_video_util(url)
-		async with TempVideo(path) as path:
+		downloaded_video = download_video_util(url)
+		async with TempVideo(downloaded_video.path) as path:
 			video = FSInputFile(path)
-			await message.answer_video(video)
+			await message.answer_video(
+				video,
+				duration=downloaded_video.duration,
+				width=downloaded_video.width,
+				height=downloaded_video.height,
+				supports_streaming=True,
+			)
 	else:
 		await message.answer(messages["VALIDATION_ERROR"])
