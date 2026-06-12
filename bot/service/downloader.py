@@ -1,5 +1,7 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 from time import monotonic
 from uuid import uuid4
 
@@ -23,6 +25,7 @@ from bot.handlers.constants.messages import messages
 DOWNLOAD_FORMAT_PREFIX = "download_format:"
 DOWNLOAD_URL_TTL_SECONDS = 15 * 60
 TELEGRAM_AUDIO_MAX_BYTES = 50 * 1024 * 1024
+DOWNLOAD_WORKERS = 2
 
 
 @dataclass(frozen=True)
@@ -33,6 +36,10 @@ class PendingDownload:
 
 _download_urls: dict[str, PendingDownload] = {}
 _download_cleanup_tasks: set[asyncio.Task[None]] = set()
+_download_executor = ThreadPoolExecutor(
+	max_workers=DOWNLOAD_WORKERS,
+	thread_name_prefix="download",
+)
 
 
 async def choose_download_format(url: str | None, message: Message):
@@ -141,12 +148,20 @@ async def remove_expired_download_url(request_id: str, expires_at: float):
 		_download_urls.pop(request_id, None)
 
 
+async def run_download_in_thread(download_func, url: str):
+	loop = asyncio.get_running_loop()
+	return await loop.run_in_executor(
+		_download_executor,
+		partial(download_func, url),
+	)
+
+
 async def download_video(url: str, message: Message):
 	if not validators.url(url):
 		await message.answer(messages["VALIDATION_ERROR"])
 		return
 
-	downloaded_video = await asyncio.to_thread(download_video_util, url)
+	downloaded_video = await run_download_in_thread(download_video_util, url)
 	async with TempVideo(downloaded_video.path) as path:
 		video = FSInputFile(path)
 		await message.answer_video(
@@ -167,7 +182,7 @@ async def download_audio(url: str, message: Message):
 		await message.answer(messages["YOUTUBE_MP3_ONLY"])
 		return
 
-	downloaded_audio = await asyncio.to_thread(download_audio_util, url)
+	downloaded_audio = await run_download_in_thread(download_audio_util, url)
 	async with TempVideo(downloaded_audio.path) as path:
 		if path.stat().st_size > TELEGRAM_AUDIO_MAX_BYTES:
 			await message.answer(messages["AUDIO_TOO_LARGE"])
