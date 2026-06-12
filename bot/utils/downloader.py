@@ -38,6 +38,7 @@ def download_video(
         "outtmpl": f"{output_path}/{filename}.%(ext)s",
         "format": get_format(url),
         "merge_output_format": "mp4",
+        "noplaylist": True,
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -64,6 +65,7 @@ def download_audio(
     ydl_opts = {
         "outtmpl": f"{output_path}/{filename}.%(ext)s",
         "format": "bestaudio/best",
+        "noplaylist": True,
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
