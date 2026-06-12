@@ -12,13 +12,19 @@ def create_filename(prefix: str = "video") -> str:
 def download_video(url: str, output_path: str = "downloads", filename: str = "video"):
 	filename = create_filename()
 
+	MAX_SIZE = "45M"
 
 	ydl_opts = {
 		"outtmpl": f"{output_path}/{filename}.%(ext)s",
-		"format": "bv*+ba/best",
-        "merge_output_format": "mp4",
+		"format": (
+			f"bestvideo[filesize<{MAX_SIZE}]+bestaudio[filesize<{MAX_SIZE}]/"
+			f"bestvideo[filesize_approx<{MAX_SIZE}]+bestaudio[filesize_approx<{MAX_SIZE}]/"
+			f"best[filesize<{MAX_SIZE}]/"
+			f"best[filesize_approx<{MAX_SIZE}]/"
+			"worst"
+		),
+		"merge_output_format": "mp4",
 	}
-
 
 	with yt_dlp.YoutubeDL(ydl_opts) as ydl:
 		info = ydl.extract_info(url, download=True)
