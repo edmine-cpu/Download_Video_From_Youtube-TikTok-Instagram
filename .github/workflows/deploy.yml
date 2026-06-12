@@ -1,12 +1,46 @@
-name: Deploy
+name: CI/CD
 
 on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install --upgrade pip uv
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Check bot package
+        env:
+          BOT_TOKEN: dummy
+        run: |
+          uv run python -m compileall bot
+          uv run python -c "import bot.main"
+
   deploy:
+    needs: ci
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:
@@ -16,9 +50,53 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          script_stop: true
           script: |
-            cd ${{ secrets.VPS_PATH }}
-            git pull
-            /root/.local/bin/uv sync
-            systemctl restart download-video-bot
-            systemctl status download-video-bot --no-pager
+            set -eu
+
+            APP_DIR="${{ secrets.VPS_PATH }}"
+            if [ -z "$APP_DIR" ]; then
+              APP_DIR="/opt/Download_Video_From_Youtube-TikTok-Instagram"
+            fi
+
+            SERVICE_NAME="download-video-bot"
+
+            cd "$APP_DIR"
+            git fetch origin main
+            git checkout main
+            git pull --ff-only origin main
+
+            if [ -n "${{ secrets.BOT_TOKEN }}" ]; then
+              umask 077
+              printf 'BOT_TOKEN=%s\n' "${{ secrets.BOT_TOKEN }}" > .env
+            fi
+
+            if ! command -v ffmpeg >/dev/null 2>&1; then
+              apt-get update
+              apt-get install -y ffmpeg
+            fi
+
+            /root/.local/bin/uv sync --locked
+
+            cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<SERVICE
+            [Unit]
+            Description=Download Video Bot
+            After=network.target
+
+            [Service]
+            WorkingDirectory=${APP_DIR}
+            EnvironmentFile=${APP_DIR}/.env
+            ExecStart=/root/.local/bin/uv run python -m bot
+            Restart=always
+            RestartSec=5
+            User=root
+
+            [Install]
+            WantedBy=multi-user.target
+            SERVICE
+
+            systemctl daemon-reload
+            systemctl enable "$SERVICE_NAME"
+            systemctl restart "$SERVICE_NAME"
+            systemctl status "$SERVICE_NAME" --no-pager
