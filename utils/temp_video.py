@@ -11,6 +11,6 @@ class TempVideo:
 		return self.path		
 	
 
-	def __aexit__(self, exc_type, exc, tb):
+	async def __aexit__(self, exc_type, exc, tb):
 		if self.path.exists():
 			self.path.unlink()

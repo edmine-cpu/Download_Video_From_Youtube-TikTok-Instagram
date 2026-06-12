@@ -15,6 +15,8 @@ def download_video(url: str, output_path: str = "downloads", filename: str = "vi
 
 	ydl_opts = {
 		"outtmpl": f"{output_path}/{filename}.%(ext)s",
+		"format": "bv*+ba/best",
+        "merge_output_format": "mp4",
 	}
 
 
