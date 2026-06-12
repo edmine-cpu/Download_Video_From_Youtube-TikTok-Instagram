@@ -1,7 +1,7 @@
 from aiogram import Router
 from aiogram.types import Message
 from .constants.messages import messages
-from service import downloader
+from bot.service import downloader
 
 
 router = Router()

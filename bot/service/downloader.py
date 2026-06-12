@@ -1,9 +1,9 @@
 import asyncio
 import validators
 from aiogram.types import Message, FSInputFile
-from utils.temp_video import TempVideo
-from utils.downloader import download_video as download_video_util
-from handlers.constants.messages import messages
+from bot.utils.temp_video import TempVideo
+from bot.utils.downloader import download_video as download_video_util
+from bot.handlers.constants.messages import messages
 
 
 async def download_video(url: str, message: Message):
