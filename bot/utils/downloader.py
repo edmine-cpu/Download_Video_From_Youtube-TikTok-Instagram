@@ -21,6 +21,12 @@ class DownloadedAudio:
     duration: int | None = None
 
 
+@dataclass(frozen=True)
+class VideoQuality:
+    height: int
+    filesize: int | None = None
+
+
 def create_filename(prefix: str = "video") -> str:
     code = uuid4().hex
     filename = f"{prefix}_{code}"
@@ -31,12 +37,13 @@ def download_video(
     url: str,
     output_path: str = "downloads",
     filename: str = "video",
+    max_height: int | None = None,
 ) -> DownloadedVideo:
     filename = create_filename(filename)
 
     ydl_opts = {
         "outtmpl": f"{output_path}/{filename}.%(ext)s",
-        "format": get_format(url),
+        "format": get_format(url, max_height),
         "merge_output_format": "mp4",
         "noplaylist": True,
     }
@@ -53,6 +60,40 @@ def download_video(
         height=height,
         duration=to_int(info.get("duration")),
     )
+
+
+def get_video_qualities(url: str) -> list[VideoQuality]:
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "noplaylist": True,
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    formats = info.get("formats") or []
+    heights = sorted(
+        {
+            height
+            for format_info in formats
+            if is_video_format(format_info)
+            if (height := to_int(format_info.get("height")))
+        },
+        reverse=True,
+    )
+
+    if not heights and (height := to_int(info.get("height"))):
+        heights = [height]
+
+    return [
+        VideoQuality(
+            height=height,
+            filesize=estimate_video_filesize(formats, height, info),
+        )
+        for height in heights
+    ]
 
 
 def download_audio(
@@ -135,8 +176,18 @@ def to_int(value) -> int | None:
         return None
 
 
-def get_format(url: str) -> str:
+def get_format(url: str, max_height: int | None = None) -> str:
     MAX_SIZE = "45M"
+
+    if max_height and is_youtube_url(url):
+        return (
+            f"bestvideo[height<={max_height}][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/"
+            f"bestvideo[height<={max_height}][ext=mp4]+bestaudio[ext=m4a]/"
+            f"bestvideo[height<={max_height}]+bestaudio/"
+            f"best[height<={max_height}][ext=mp4]/"
+            f"best[height<={max_height}]/"
+            "best"
+        )
 
     if "instagram.com" in url:
         return (
@@ -168,3 +219,97 @@ def get_format(url: str) -> str:
 def is_youtube_url(url: str) -> bool:
     host = (urlparse(url).hostname or "").lower()
     return host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
+
+
+def is_video_format(format_info: dict) -> bool:
+    return format_info.get("vcodec") not in {None, "none"}
+
+
+def is_audio_only_format(format_info: dict) -> bool:
+    return (
+        format_info.get("acodec") not in {None, "none"}
+        and format_info.get("vcodec") in {None, "none"}
+    )
+
+
+def estimate_video_filesize(
+    formats: list[dict],
+    height: int,
+    info: dict,
+) -> int | None:
+    video_format = choose_video_format_for_height(formats, height)
+    if not video_format:
+        return None
+
+    video_size = get_format_filesize(video_format, info)
+    if not video_size:
+        return None
+
+    if video_format.get("acodec") not in {None, "none"}:
+        return video_size
+
+    audio_format = choose_audio_format(formats)
+    audio_size = get_format_filesize(audio_format, info) if audio_format else None
+    if not audio_size:
+        return video_size
+
+    return video_size + audio_size
+
+
+def choose_video_format_for_height(formats: list[dict], height: int) -> dict | None:
+    candidates = [
+        format_info
+        for format_info in formats
+        if is_video_format(format_info)
+        if to_int(format_info.get("height")) == height
+    ]
+    if not candidates:
+        return None
+
+    return max(candidates, key=video_format_score)
+
+
+def choose_audio_format(formats: list[dict]) -> dict | None:
+    candidates = [
+        format_info
+        for format_info in formats
+        if is_audio_only_format(format_info)
+    ]
+    if not candidates:
+        return None
+
+    return max(candidates, key=audio_format_score)
+
+
+def video_format_score(format_info: dict) -> tuple[int, int, int, int, int]:
+    return (
+        int(format_info.get("ext") == "mp4"),
+        int(str(format_info.get("vcodec") or "").startswith("avc1")),
+        to_int(format_info.get("tbr")) or 0,
+        get_format_filesize(format_info, {}) or 0,
+        to_int(format_info.get("format_id")) or 0,
+    )
+
+
+def audio_format_score(format_info: dict) -> tuple[int, int, int]:
+    return (
+        int(format_info.get("ext") == "m4a"),
+        to_int(format_info.get("abr")) or to_int(format_info.get("tbr")) or 0,
+        get_format_filesize(format_info, {}) or 0,
+    )
+
+
+def get_format_filesize(format_info: dict | None, info: dict) -> int | None:
+    if not format_info:
+        return None
+
+    filesize = to_int(format_info.get("filesize")) or to_int(format_info.get("filesize_approx"))
+    if filesize:
+        return filesize
+
+    duration = to_int(format_info.get("duration")) or to_int(info.get("duration"))
+    tbr = to_int(format_info.get("tbr"))
+    if duration and tbr:
+        return int(duration * tbr * 1000 / 8)
+
+    return None

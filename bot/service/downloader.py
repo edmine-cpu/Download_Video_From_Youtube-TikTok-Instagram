@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 from time import monotonic
 from uuid import uuid4
 
@@ -14,18 +15,24 @@ from aiogram.types import (
 	InlineKeyboardMarkup,
 	Message,
 )
+from bot.settings import settings
 from bot.utils.temp_video import TempVideo
 from bot.utils.downloader import (
 	download_audio as download_audio_util,
 	download_video as download_video_util,
+	get_video_qualities,
 	is_youtube_url,
+	VideoQuality,
 )
 from bot.handlers.constants.messages import messages
+from download_links import create_download_link
 
 
 DOWNLOAD_FORMAT_PREFIX = "download_format:"
+DOWNLOAD_QUALITY_PREFIX = "download_quality:"
 DOWNLOAD_URL_TTL_SECONDS = 15 * 60
 TELEGRAM_AUDIO_MAX_BYTES = 50 * 1024 * 1024
+TELEGRAM_VIDEO_MAX_BYTES = 50 * 1024 * 1024
 DOWNLOAD_WORKERS = 2
 
 
@@ -88,14 +95,56 @@ async def download_by_format(callback: CallbackQuery):
 		await message.answer(messages["YOUTUBE_MP3_ONLY"])
 		return
 
-	_download_urls.pop(request_id, None)
-	await message.edit_text(messages["DOWNLOAD_STARTED"])
-
 	if format_type == "mp3":
+		_download_urls.pop(request_id, None)
+		await message.edit_text(messages["DOWNLOAD_STARTED"])
 		await download_audio(url, message, message)
 		return
 
+	if is_youtube_url(url):
+		await show_resolution_selection(url, request_id, message)
+		return
+
+	_download_urls.pop(request_id, None)
+	await message.edit_text(messages["DOWNLOAD_STARTED"])
 	await download_video(url, message, message)
+
+
+async def download_by_resolution(callback: CallbackQuery):
+	await callback.answer()
+
+	message = callback.message
+	if not isinstance(message, Message):
+		return
+
+	height, request_id = parse_quality_callback_data(callback.data)
+	if not height or not request_id:
+		await message.answer(messages["DOWNLOAD_REQUEST_EXPIRED"])
+		return
+
+	url = get_active_download_url(request_id)
+	if not url:
+		await message.answer(messages["DOWNLOAD_REQUEST_EXPIRED"])
+		return
+
+	_download_urls.pop(request_id, None)
+	await message.edit_text(messages["DOWNLOAD_STARTED"])
+	await download_video(url, message, message, max_height=height)
+
+
+async def show_resolution_selection(url: str, request_id: str, message: Message):
+	try:
+		qualities = await run_download_in_thread(get_video_qualities, url)
+	except Exception:
+		qualities = []
+
+	if not qualities:
+		qualities = [VideoQuality(height=480)]
+
+	await message.edit_text(
+		messages["CHOOSE_RESOLUTION"],
+		reply_markup=create_resolution_keyboard(request_id, qualities),
+	)
 
 
 def create_format_keyboard(request_id: str, url: str) -> InlineKeyboardMarkup:
@@ -123,6 +172,34 @@ def create_format_keyboard(request_id: str, url: str) -> InlineKeyboardMarkup:
 	)
 
 
+def create_resolution_keyboard(
+	request_id: str,
+	qualities: list[VideoQuality],
+) -> InlineKeyboardMarkup:
+	return InlineKeyboardMarkup(
+		inline_keyboard=[
+			[
+				InlineKeyboardButton(
+					text=format_quality_label(quality),
+					callback_data=f"{DOWNLOAD_QUALITY_PREFIX}{quality.height}:{request_id}",
+				)
+			]
+			for quality in qualities
+		]
+	)
+
+
+def format_quality_label(quality: VideoQuality) -> str:
+	label = f"{quality.height}p"
+	if quality.filesize:
+		label += f" ~{format_bytes_as_mb(quality.filesize)} МБ"
+	return label
+
+
+def format_bytes_as_mb(size: int) -> str:
+	return str(round(size / 1024 / 1024))
+
+
 def parse_callback_data(data: str | None) -> tuple[str, str]:
 	if not data:
 		return "", ""
@@ -134,6 +211,24 @@ def parse_callback_data(data: str | None) -> tuple[str, str]:
 
 	format_type, request_id = callback_parts
 	return format_type, request_id
+
+
+def parse_quality_callback_data(data: str | None) -> tuple[int | None, str]:
+	if not data:
+		return None, ""
+
+	data = data.removeprefix(DOWNLOAD_QUALITY_PREFIX)
+	callback_parts = data.split(":", maxsplit=1)
+	if len(callback_parts) != 2:
+		return None, ""
+
+	height_raw, request_id = callback_parts
+	try:
+		height = int(height_raw)
+	except ValueError:
+		return None, ""
+
+	return height, request_id
 
 
 def get_active_download_url(request_id: str) -> str | None:
@@ -162,11 +257,11 @@ async def remove_expired_download_url(request_id: str, expires_at: float):
 		_download_urls.pop(request_id, None)
 
 
-async def run_download_in_thread(download_func, url: str):
+async def run_download_in_thread(download_func, url: str, **kwargs):
 	loop = asyncio.get_running_loop()
 	return await loop.run_in_executor(
 		_download_executor,
-		partial(download_func, url),
+		partial(download_func, url, **kwargs),
 	)
 
 
@@ -178,14 +273,32 @@ async def delete_message_safely(message: Message | None):
 		await message.delete()
 
 
-async def download_video(url: str, message: Message, status_message: Message | None = None):
+async def download_video(
+	url: str,
+	message: Message,
+	status_message: Message | None = None,
+	max_height: int | None = None,
+):
 	if not validators.url(url):
 		await message.answer(messages["VALIDATION_ERROR"])
 		return
 
 	try:
-		downloaded_video = await run_download_in_thread(download_video_util, url)
-		async with TempVideo(downloaded_video.path) as path:
+		downloaded_video = await run_download_in_thread(
+			download_video_util,
+			url,
+			max_height=max_height,
+		)
+		video_path = Path(downloaded_video.path)
+		if video_path.stat().st_size > TELEGRAM_VIDEO_MAX_BYTES:
+			link = create_public_download_link(video_path)
+			await message.answer(
+				messages["VIDEO_TOO_LARGE"].format(link=link),
+				disable_web_page_preview=True,
+			)
+			return
+
+		async with TempVideo(video_path) as path:
 			video = FSInputFile(path)
 			await message.answer_video(
 				video,
@@ -223,3 +336,13 @@ async def download_audio(url: str, message: Message, status_message: Message | N
 			)
 	finally:
 		await delete_message_safely(status_message)
+
+
+def create_public_download_link(path: Path) -> str:
+	token = create_download_link(
+		path,
+		Path(settings.DOWNLOAD_LINKS_STATE_PATH),
+		settings.DOWNLOAD_LINK_TTL_SECONDS,
+		path.name,
+	)
+	return f"{settings.DOWNLOAD_API_BASE_URL.rstrip('/')}/d/{token}"

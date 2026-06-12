@@ -60,16 +60,44 @@ jobs:
             fi
 
             SERVICE_NAME="download-video-bot"
+            API_SERVICE_NAME="download-video-api"
+            API_PORT="${{ secrets.DOWNLOAD_API_PORT }}"
+            if [ -z "$API_PORT" ]; then
+              API_PORT="8000"
+            fi
+
+            API_BASE_URL="${{ secrets.DOWNLOAD_API_BASE_URL }}"
+            if [ -z "$API_BASE_URL" ]; then
+              API_BASE_URL="http://${{ secrets.VPS_HOST }}:${API_PORT}"
+            fi
+
+            DOWNLOAD_LINKS_STATE_PATH="${APP_DIR}/download_links_storage/state.json"
+            DOWNLOAD_LINK_TTL_SECONDS="21600"
 
             cd "$APP_DIR"
             git fetch origin main
             git checkout main
             git pull --ff-only origin main
 
-            if [ -n "${{ secrets.BOT_TOKEN }}" ]; then
-              umask 077
-              printf 'BOT_TOKEN=%s\n' "${{ secrets.BOT_TOKEN }}" > .env
+            BOT_TOKEN_VALUE="${{ secrets.BOT_TOKEN }}"
+            if [ -z "$BOT_TOKEN_VALUE" ] && [ -f .env ]; then
+              BOT_TOKEN_VALUE="$(grep -m 1 '^BOT_TOKEN=' .env | cut -d= -f2- || true)"
             fi
+
+            if [ -z "$BOT_TOKEN_VALUE" ]; then
+              echo "BOT_TOKEN is required"
+              exit 1
+            fi
+
+            mkdir -p "$(dirname "$DOWNLOAD_LINKS_STATE_PATH")"
+
+            umask 077
+            {
+              printf 'BOT_TOKEN=%s\n' "$BOT_TOKEN_VALUE"
+              printf 'DOWNLOAD_API_BASE_URL=%s\n' "$API_BASE_URL"
+              printf 'DOWNLOAD_LINKS_STATE_PATH=%s\n' "$DOWNLOAD_LINKS_STATE_PATH"
+              printf 'DOWNLOAD_LINK_TTL_SECONDS=%s\n' "$DOWNLOAD_LINK_TTL_SECONDS"
+            } > .env
 
             if ! command -v ffmpeg >/dev/null 2>&1; then
               apt-get update
@@ -77,6 +105,19 @@ jobs:
             fi
 
             /root/.local/bin/uv sync --locked
+
+            if command -v ufw >/dev/null 2>&1; then
+              ufw allow "${API_PORT}/tcp" || true
+            fi
+
+            if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+              firewall-cmd --permanent --add-port="${API_PORT}/tcp" || true
+              firewall-cmd --reload || true
+            fi
+
+            if command -v iptables >/dev/null 2>&1; then
+              iptables -C INPUT -p tcp --dport "$API_PORT" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$API_PORT" -j ACCEPT || true
+            fi
 
             {
               printf '%s\n' '[Unit]'
@@ -95,7 +136,27 @@ jobs:
               printf '%s\n' 'WantedBy=multi-user.target'
             } > "/etc/systemd/system/${SERVICE_NAME}.service"
 
+            {
+              printf '%s\n' '[Unit]'
+              printf '%s\n' 'Description=Download Video Link API'
+              printf '%s\n' 'After=network.target'
+              printf '%s\n' ''
+              printf '%s\n' '[Service]'
+              printf '%s\n' "WorkingDirectory=${APP_DIR}"
+              printf '%s\n' "EnvironmentFile=${APP_DIR}/.env"
+              printf '%s\n' "ExecStart=/root/.local/bin/uv run uvicorn download_api.main:app --host 0.0.0.0 --port ${API_PORT}"
+              printf '%s\n' 'Restart=always'
+              printf '%s\n' 'RestartSec=5'
+              printf '%s\n' 'User=root'
+              printf '%s\n' ''
+              printf '%s\n' '[Install]'
+              printf '%s\n' 'WantedBy=multi-user.target'
+            } > "/etc/systemd/system/${API_SERVICE_NAME}.service"
+
             systemctl daemon-reload
             systemctl enable "$SERVICE_NAME"
+            systemctl enable "$API_SERVICE_NAME"
+            systemctl restart "$API_SERVICE_NAME"
             systemctl restart "$SERVICE_NAME"
+            systemctl status "$API_SERVICE_NAME" --no-pager
             systemctl status "$SERVICE_NAME" --no-pager

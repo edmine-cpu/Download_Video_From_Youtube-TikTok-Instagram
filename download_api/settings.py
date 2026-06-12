@@ -1,13 +1,10 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseSettings):
-	BOT_TOKEN: str
-	DOWNLOAD_API_BASE_URL: str = "http://127.0.0.1:8000"
+class ApiSettings(BaseSettings):
 	DOWNLOAD_LINKS_STATE_PATH: str = "download_links_storage/state.json"
-	DOWNLOAD_LINK_TTL_SECONDS: int = 6 * 60 * 60
 
 	model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
-settings = Settings()
+settings = ApiSettings()

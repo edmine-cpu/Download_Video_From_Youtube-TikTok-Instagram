@@ -14,3 +14,8 @@ async def download_by_url(message: Message):
 @router.callback_query(F.data.startswith("download_format:"))
 async def download_by_format(callback: CallbackQuery):
 	await downloader.download_by_format(callback)
+
+
+@router.callback_query(F.data.startswith("download_quality:"))
+async def download_by_resolution(callback: CallbackQuery):
+	await downloader.download_by_resolution(callback)
