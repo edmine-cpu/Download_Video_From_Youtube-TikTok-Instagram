@@ -30,6 +30,7 @@ from download_links import create_download_link
 
 DOWNLOAD_FORMAT_PREFIX = "download_format:"
 DOWNLOAD_QUALITY_PREFIX = "download_quality:"
+HIDE_MESSAGE_CALLBACK = "hide_message"
 DOWNLOAD_URL_TTL_SECONDS = 15 * 60
 TELEGRAM_AUDIO_MAX_BYTES = 50 * 1024 * 1024
 TELEGRAM_VIDEO_MAX_BYTES = 50 * 1024 * 1024
@@ -132,6 +133,14 @@ async def download_by_resolution(callback: CallbackQuery):
 	await download_video(url, message, message, max_height=height)
 
 
+async def hide_message(callback: CallbackQuery):
+	await callback.answer()
+
+	message = callback.message
+	if isinstance(message, Message):
+		await delete_message_safely(message)
+
+
 async def show_resolution_selection(url: str, request_id: str, message: Message):
 	try:
 		qualities = await run_download_in_thread(get_video_qualities, url)
@@ -181,7 +190,7 @@ def create_resolution_keyboard(
 			[
 				InlineKeyboardButton(
 					text=format_quality_label(quality),
-					callback_data=f"{DOWNLOAD_QUALITY_PREFIX}{quality.height}:{request_id}",
+					callback_data=f"{DOWNLOAD_QUALITY_PREFIX}{quality.max_height or quality.height}:{request_id}",
 				)
 			]
 			for quality in qualities
@@ -198,6 +207,19 @@ def format_quality_label(quality: VideoQuality) -> str:
 
 def format_bytes_as_mb(size: int) -> str:
 	return str(round(size / 1024 / 1024))
+
+
+def create_hide_keyboard() -> InlineKeyboardMarkup:
+	return InlineKeyboardMarkup(
+		inline_keyboard=[
+			[
+				InlineKeyboardButton(
+					text="Скрыть",
+					callback_data=HIDE_MESSAGE_CALLBACK,
+				)
+			]
+		]
+	)
 
 
 def parse_callback_data(data: str | None) -> tuple[str, str]:
@@ -295,6 +317,7 @@ async def download_video(
 			await message.answer(
 				messages["VIDEO_TOO_LARGE"].format(link=link),
 				disable_web_page_preview=True,
+				reply_markup=create_hide_keyboard(),
 			)
 			return
 

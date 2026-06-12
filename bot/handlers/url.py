@@ -19,3 +19,8 @@ async def download_by_format(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("download_quality:"))
 async def download_by_resolution(callback: CallbackQuery):
 	await downloader.download_by_resolution(callback)
+
+
+@router.callback_query(F.data == "hide_message")
+async def hide_message(callback: CallbackQuery):
+	await downloader.hide_message(callback)

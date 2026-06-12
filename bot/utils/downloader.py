@@ -24,7 +24,11 @@ class DownloadedAudio:
 @dataclass(frozen=True)
 class VideoQuality:
     height: int
+    max_height: int | None = None
     filesize: int | None = None
+
+
+STANDARD_VIDEO_QUALITIES = [144, 240, 360, 480, 720, 1080, 1440, 2160, 4320]
 
 
 def create_filename(prefix: str = "video") -> str:
@@ -74,25 +78,30 @@ def get_video_qualities(url: str) -> list[VideoQuality]:
         info = ydl.extract_info(url, download=False)
 
     formats = info.get("formats") or []
-    heights = sorted(
-        {
-            height
-            for format_info in formats
-            if is_video_format(format_info)
-            if (height := to_int(format_info.get("height")))
-        },
-        reverse=True,
-    )
+    quality_formats: dict[int, dict] = {}
 
-    if not heights and (height := to_int(info.get("height"))):
-        heights = [height]
+    for format_info in formats:
+        if not is_video_format(format_info):
+            continue
+
+        quality_height = get_standard_quality_height(format_info)
+        if not quality_height:
+            continue
+
+        current_format = quality_formats.get(quality_height)
+        if not current_format or video_format_score(format_info) > video_format_score(current_format):
+            quality_formats[quality_height] = format_info
+
+    if not quality_formats and (height := get_standard_quality_height(info)):
+        quality_formats[height] = info
 
     return [
         VideoQuality(
-            height=height,
-            filesize=estimate_video_filesize(formats, height, info),
+            height=quality_height,
+            max_height=to_int(format_info.get("height")) or quality_height,
+            filesize=estimate_video_filesize(format_info, formats, info),
         )
-        for height in heights
+        for quality_height, format_info in sorted(quality_formats.items(), reverse=True)
     ]
 
 
@@ -233,14 +242,10 @@ def is_audio_only_format(format_info: dict) -> bool:
 
 
 def estimate_video_filesize(
+    video_format: dict,
     formats: list[dict],
-    height: int,
     info: dict,
 ) -> int | None:
-    video_format = choose_video_format_for_height(formats, height)
-    if not video_format:
-        return None
-
     video_size = get_format_filesize(video_format, info)
     if not video_size:
         return None
@@ -256,19 +261,6 @@ def estimate_video_filesize(
     return video_size + audio_size
 
 
-def choose_video_format_for_height(formats: list[dict], height: int) -> dict | None:
-    candidates = [
-        format_info
-        for format_info in formats
-        if is_video_format(format_info)
-        if to_int(format_info.get("height")) == height
-    ]
-    if not candidates:
-        return None
-
-    return max(candidates, key=video_format_score)
-
-
 def choose_audio_format(formats: list[dict]) -> dict | None:
     candidates = [
         format_info
@@ -279,6 +271,29 @@ def choose_audio_format(formats: list[dict]) -> dict | None:
         return None
 
     return max(candidates, key=audio_format_score)
+
+
+def get_standard_quality_height(format_info: dict) -> int | None:
+    width = to_int(format_info.get("width"))
+    height = to_int(format_info.get("height"))
+
+    if width and height:
+        raw_quality = min(width, height)
+    else:
+        raw_quality = height or width
+
+    if not raw_quality:
+        return None
+
+    matching_qualities = [
+        quality
+        for quality in STANDARD_VIDEO_QUALITIES
+        if quality <= raw_quality
+    ]
+    if matching_qualities:
+        return matching_qualities[-1]
+
+    return STANDARD_VIDEO_QUALITIES[0]
 
 
 def video_format_score(format_info: dict) -> tuple[int, int, int, int, int]:
