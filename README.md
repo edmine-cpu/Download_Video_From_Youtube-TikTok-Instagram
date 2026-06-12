@@ -1,2 +1,1 @@
-Нужно установить FFMPEG в систему.
-запуск - python3 main.py 
+Нужно установить FFMPEG в систему. запуск - python3 main.py Test
