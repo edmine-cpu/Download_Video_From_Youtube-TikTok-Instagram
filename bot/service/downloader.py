@@ -56,7 +56,7 @@ async def choose_download_format(url: str | None, message: Message):
 
 	await message.answer(
 		messages["CHOOSE_FORMAT"],
-		reply_markup=create_format_keyboard(request_id),
+		reply_markup=create_format_keyboard(request_id, url),
 	)
 
 
@@ -92,19 +92,27 @@ async def download_by_format(callback: CallbackQuery):
 	await download_video(url, message)
 
 
-def create_format_keyboard(request_id: str) -> InlineKeyboardMarkup:
+def create_format_keyboard(request_id: str, url: str) -> InlineKeyboardMarkup:
+	buttons = []
+
+	if is_youtube_url(url):
+		buttons.append(
+			InlineKeyboardButton(
+				text="MP3",
+				callback_data=f"{DOWNLOAD_FORMAT_PREFIX}mp3:{request_id}",
+			)
+		)
+
+	buttons.append(
+		InlineKeyboardButton(
+			text="MP4",
+			callback_data=f"{DOWNLOAD_FORMAT_PREFIX}mp4:{request_id}",
+		)
+	)
+
 	return InlineKeyboardMarkup(
 		inline_keyboard=[
-			[
-				InlineKeyboardButton(
-					text="MP3",
-					callback_data=f"{DOWNLOAD_FORMAT_PREFIX}mp3:{request_id}",
-				),
-				InlineKeyboardButton(
-					text="MP4",
-					callback_data=f"{DOWNLOAD_FORMAT_PREFIX}mp4:{request_id}",
-				),
-			]
+			buttons
 		]
 	)
 
