@@ -75,6 +75,8 @@ jobs:
 
             DOWNLOAD_LINKS_STATE_PATH="${APP_DIR}/download_links_storage/state.json"
             DOWNLOAD_LINK_TTL_SECONDS="21600"
+            DOWNLOAD_LINK_USED_TTL_SECONDS="600"
+            DOWNLOAD_LINK_CLEANUP_INTERVAL_SECONDS="300"
 
             cd "$APP_DIR"
             git fetch origin main
@@ -99,6 +101,8 @@ jobs:
               printf 'DOWNLOAD_API_BASE_URL=%s\n' "$API_BASE_URL"
               printf 'DOWNLOAD_LINKS_STATE_PATH=%s\n' "$DOWNLOAD_LINKS_STATE_PATH"
               printf 'DOWNLOAD_LINK_TTL_SECONDS=%s\n' "$DOWNLOAD_LINK_TTL_SECONDS"
+              printf 'DOWNLOAD_LINK_USED_TTL_SECONDS=%s\n' "$DOWNLOAD_LINK_USED_TTL_SECONDS"
+              printf 'DOWNLOAD_LINK_CLEANUP_INTERVAL_SECONDS=%s\n' "$DOWNLOAD_LINK_CLEANUP_INTERVAL_SECONDS"
             } > .env
 
             if ! command -v ffmpeg >/dev/null 2>&1; then

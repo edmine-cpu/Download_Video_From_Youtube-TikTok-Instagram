@@ -44,6 +44,47 @@ def consume_download_link(token: str, state_path: Path) -> DownloadLink | None:
 		_cleanup_expired_links(state)
 		raw_link = state.pop(token, None)
 
+	return _parse_download_link(raw_link)
+
+
+def get_download_link(token: str, state_path: Path) -> DownloadLink | None:
+	with _locked_state(state_path) as state:
+		_cleanup_expired_links(state)
+		raw_link = state.get(token)
+
+	return _parse_download_link(raw_link)
+
+
+def mark_download_link_used(
+	token: str,
+	state_path: Path,
+	used_ttl_seconds: int,
+) -> DownloadLink | None:
+	with _locked_state(state_path) as state:
+		_cleanup_expired_links(state)
+		raw_link = state.get(token)
+		download_link = _parse_download_link(raw_link)
+
+		if not download_link or not raw_link:
+			return None
+
+		expires_at = min(download_link.expires_at, time.time() + used_ttl_seconds)
+		raw_link["expires_at"] = expires_at
+		raw_link.setdefault("used_at", time.time())
+
+		return DownloadLink(
+			path=download_link.path,
+			filename=download_link.filename,
+			expires_at=expires_at,
+		)
+
+
+def cleanup_expired_download_links(state_path: Path):
+	with _locked_state(state_path) as state:
+		_cleanup_expired_links(state)
+
+
+def _parse_download_link(raw_link: dict[str, Any] | None) -> DownloadLink | None:
 	if not raw_link:
 		return None
 
@@ -65,7 +106,8 @@ class _locked_state:
 
 	def __enter__(self) -> dict[str, dict[str, Any]]:
 		self.state_path.parent.mkdir(parents=True, exist_ok=True)
-		self.file = self.state_path.open("a+", encoding="utf-8")
+		self.state_path.touch(exist_ok=True)
+		self.file = self.state_path.open("r+", encoding="utf-8")
 		fcntl.flock(self.file.fileno(), fcntl.LOCK_EX)
 		self.file.seek(0)
 		raw_state = self.file.read()
@@ -93,13 +135,40 @@ def _decode_state(raw_state: str) -> dict[str, dict[str, Any]]:
 	with suppress(json.JSONDecodeError):
 		state = json.loads(raw_state)
 		if isinstance(state, dict):
-			return {
-				str(token): link
-				for token, link in state.items()
-				if isinstance(link, dict)
-			}
+			return _filter_state(state)
 
-	return {}
+	return _decode_concatenated_state(raw_state)
+
+
+def _decode_concatenated_state(raw_state: str) -> dict[str, dict[str, Any]]:
+	decoder = json.JSONDecoder()
+	position = 0
+	state: dict[str, dict[str, Any]] = {}
+
+	while position < len(raw_state):
+		while position < len(raw_state) and raw_state[position].isspace():
+			position += 1
+
+		if position >= len(raw_state):
+			break
+
+		try:
+			decoded_state, position = decoder.raw_decode(raw_state, position)
+		except json.JSONDecodeError:
+			break
+
+		if isinstance(decoded_state, dict):
+			state = _filter_state(decoded_state)
+
+	return state
+
+
+def _filter_state(state: dict) -> dict[str, dict[str, Any]]:
+	return {
+		str(token): link
+		for token, link in state.items()
+		if isinstance(link, dict)
+	}
 
 
 def _cleanup_expired_links(state: dict[str, dict[str, Any]]):
