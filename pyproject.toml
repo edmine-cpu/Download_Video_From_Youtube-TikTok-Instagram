@@ -7,5 +7,6 @@ requires-python = ">=3.12"
 dependencies = [
     "aiogram>=3.28.2",
     "pydantic-settings>=2.14.1",
+    "validators>=0.35.0",
     "yt-dlp[default]>=2026.6.9",
 ]
