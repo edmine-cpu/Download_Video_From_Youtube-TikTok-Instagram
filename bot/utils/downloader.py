@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import yt_dlp
@@ -10,6 +11,13 @@ class DownloadedVideo:
     path: str
     width: int | None = None
     height: int | None = None
+    duration: int | None = None
+
+
+@dataclass(frozen=True)
+class DownloadedAudio:
+    path: str
+    title: str | None = None
     duration: int | None = None
 
 
@@ -24,7 +32,7 @@ def download_video(
     output_path: str = "downloads",
     filename: str = "video",
 ) -> DownloadedVideo:
-    filename = create_filename()
+    filename = create_filename(filename)
 
     ydl_opts = {
         "outtmpl": f"{output_path}/{filename}.%(ext)s",
@@ -34,7 +42,7 @@ def download_video(
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        file_path = get_downloaded_file_path(ydl, info)
+        file_path = get_downloaded_file_path(ydl, info, ".mp4")
 
     width, height = get_video_dimensions(info)
 
@@ -46,7 +54,37 @@ def download_video(
     )
 
 
-def get_downloaded_file_path(ydl: yt_dlp.YoutubeDL, info: dict) -> str:
+def download_audio(
+    url: str,
+    output_path: str = "downloads",
+    filename: str = "audio",
+) -> DownloadedAudio:
+    filename = create_filename(filename)
+
+    ydl_opts = {
+        "outtmpl": f"{output_path}/{filename}.%(ext)s",
+        "format": "bestaudio/best",
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "320",
+            }
+        ],
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        file_path = get_downloaded_file_path(ydl, info, ".mp3")
+
+    return DownloadedAudio(
+        path=file_path,
+        title=info.get("title"),
+        duration=to_int(info.get("duration")),
+    )
+
+
+def get_downloaded_file_path(ydl: yt_dlp.YoutubeDL, info: dict, extension: str | None = None) -> str:
     prepared_filename = ydl.prepare_filename(info)
     prepared_path = Path(prepared_filename)
 
@@ -56,11 +94,13 @@ def get_downloaded_file_path(ydl: yt_dlp.YoutubeDL, info: dict) -> str:
         prepared_filename,
     ]
 
-    if prepared_path.suffix != ".mp4":
-        candidates.append(str(prepared_path.with_suffix(".mp4")))
+    if extension and prepared_path.suffix != extension:
+        candidates.append(str(prepared_path.with_suffix(extension)))
 
     for metadata in info.get("requested_downloads") or []:
         candidates.append(metadata.get("filepath"))
+        if extension and metadata.get("filepath"):
+            candidates.append(str(Path(metadata["filepath"]).with_suffix(extension)))
 
     for candidate in candidates:
         if candidate and Path(candidate).exists():
@@ -105,7 +145,7 @@ def get_format(url: str) -> str:
             "best[ext=mp4]/best"
         )
 
-    if "youtube.com" in url or "youtu.be" in url:
+    if is_youtube_url(url):
         return (
             f"bestvideo[ext=mp4][vcodec^=avc1][height<=480][filesize<{MAX_SIZE}]+bestaudio[ext=m4a]/"
             f"bestvideo[ext=mp4][vcodec^=avc1][height<=480][filesize_approx<{MAX_SIZE}]+bestaudio[ext=m4a]/"
@@ -121,3 +161,8 @@ def get_format(url: str) -> str:
         f"best[filesize_approx<{MAX_SIZE}]/"
         "best"
     )
+
+
+def is_youtube_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
