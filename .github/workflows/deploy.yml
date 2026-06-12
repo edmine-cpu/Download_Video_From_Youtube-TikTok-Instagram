@@ -35,8 +35,8 @@ jobs:
         env:
           BOT_TOKEN: dummy
         run: |
-          uv run python -m compileall bot
-          uv run python -c "import bot.main"
+          uv run python -m compileall bot download_api download_links
+          uv run python -c "import bot.main; import download_api.main"
 
   deploy:
     needs: ci
@@ -61,6 +61,8 @@ jobs:
 
             SERVICE_NAME="download-video-bot"
             API_SERVICE_NAME="download-video-api"
+            YTDLP_UPDATE_SERVICE_NAME="download-video-ytdlp-update"
+            YTDLP_UPDATE_TIMER_NAME="download-video-ytdlp-update.timer"
             API_PORT="${{ secrets.DOWNLOAD_API_PORT }}"
             if [ -z "$API_PORT" ]; then
               API_PORT="8000"
@@ -127,7 +129,7 @@ jobs:
               printf '%s\n' '[Service]'
               printf '%s\n' "WorkingDirectory=${APP_DIR}"
               printf '%s\n' "EnvironmentFile=${APP_DIR}/.env"
-              printf '%s\n' 'ExecStart=/root/.local/bin/uv run python -m bot'
+              printf '%s\n' "ExecStart=${APP_DIR}/.venv/bin/python -m bot"
               printf '%s\n' 'Restart=always'
               printf '%s\n' 'RestartSec=5'
               printf '%s\n' 'User=root'
@@ -144,7 +146,7 @@ jobs:
               printf '%s\n' '[Service]'
               printf '%s\n' "WorkingDirectory=${APP_DIR}"
               printf '%s\n' "EnvironmentFile=${APP_DIR}/.env"
-              printf '%s\n' "ExecStart=/root/.local/bin/uv run uvicorn download_api.main:app --host 0.0.0.0 --port ${API_PORT}"
+              printf '%s\n' "ExecStart=${APP_DIR}/.venv/bin/uvicorn download_api.main:app --host 0.0.0.0 --port ${API_PORT}"
               printf '%s\n' 'Restart=always'
               printf '%s\n' 'RestartSec=5'
               printf '%s\n' 'User=root'
@@ -153,10 +155,39 @@ jobs:
               printf '%s\n' 'WantedBy=multi-user.target'
             } > "/etc/systemd/system/${API_SERVICE_NAME}.service"
 
+            {
+              printf '%s\n' '[Unit]'
+              printf '%s\n' 'Description=Update yt-dlp for Download Video Bot'
+              printf '%s\n' 'Wants=network-online.target'
+              printf '%s\n' 'After=network-online.target'
+              printf '%s\n' ''
+              printf '%s\n' '[Service]'
+              printf '%s\n' 'Type=oneshot'
+              printf '%s\n' "WorkingDirectory=${APP_DIR}"
+              printf '%s\n' "EnvironmentFile=${APP_DIR}/.env"
+              printf '%s\n' "ExecStart=/bin/sh -lc '/root/.local/bin/uv pip install --python .venv/bin/python --upgrade \"yt-dlp[default,curl-cffi]\" && /bin/systemctl restart ${API_SERVICE_NAME} ${SERVICE_NAME}'"
+              printf '%s\n' 'User=root'
+            } > "/etc/systemd/system/${YTDLP_UPDATE_SERVICE_NAME}.service"
+
+            {
+              printf '%s\n' '[Unit]'
+              printf '%s\n' 'Description=Run yt-dlp updater daily'
+              printf '%s\n' ''
+              printf '%s\n' '[Timer]'
+              printf '%s\n' 'OnCalendar=*-*-* 04:30:00'
+              printf '%s\n' 'RandomizedDelaySec=1h'
+              printf '%s\n' 'Persistent=true'
+              printf '%s\n' ''
+              printf '%s\n' '[Install]'
+              printf '%s\n' 'WantedBy=timers.target'
+            } > "/etc/systemd/system/${YTDLP_UPDATE_TIMER_NAME}"
+
             systemctl daemon-reload
             systemctl enable "$SERVICE_NAME"
             systemctl enable "$API_SERVICE_NAME"
+            systemctl enable --now "$YTDLP_UPDATE_TIMER_NAME"
             systemctl restart "$API_SERVICE_NAME"
             systemctl restart "$SERVICE_NAME"
             systemctl status "$API_SERVICE_NAME" --no-pager
             systemctl status "$SERVICE_NAME" --no-pager
+            systemctl status "$YTDLP_UPDATE_TIMER_NAME" --no-pager

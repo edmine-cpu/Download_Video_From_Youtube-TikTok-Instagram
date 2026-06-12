@@ -38,6 +38,8 @@ DOWNLOAD_URL_TTL_SECONDS = 15 * 60
 TELEGRAM_AUDIO_MAX_BYTES = 50 * 1024 * 1024
 TELEGRAM_VIDEO_MAX_BYTES = 50 * 1024 * 1024
 DOWNLOAD_WORKERS = 2
+DOWNLOAD_ATTEMPTS = 3
+DOWNLOAD_RETRY_DELAYS = (3, 8)
 logger = logging.getLogger(__name__)
 
 
@@ -53,6 +55,7 @@ _download_executor = ThreadPoolExecutor(
 	max_workers=DOWNLOAD_WORKERS,
 	thread_name_prefix="download",
 )
+_unstable_source_download_lock = asyncio.Lock()
 
 
 async def choose_download_format(url: str | None, message: Message):
@@ -291,6 +294,35 @@ async def run_download_in_thread(download_func, url: str, **kwargs):
 	)
 
 
+async def run_download_with_retries(download_func, url: str, **kwargs):
+	for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+		try:
+			return await run_download_in_thread(download_func, url, **kwargs)
+		except DownloadError:
+			if attempt >= DOWNLOAD_ATTEMPTS:
+				raise
+
+			delay = DOWNLOAD_RETRY_DELAYS[min(attempt - 1, len(DOWNLOAD_RETRY_DELAYS) - 1)]
+			logger.warning(
+				"yt-dlp download attempt %s/%s failed for %s; retrying in %s seconds",
+				attempt,
+				DOWNLOAD_ATTEMPTS,
+				url,
+				delay,
+			)
+			await asyncio.sleep(delay)
+
+	raise RuntimeError("unreachable download retry state")
+
+
+async def run_download_queued(download_func, url: str, **kwargs):
+	if is_youtube_url(url):
+		return await run_download_with_retries(download_func, url, **kwargs)
+
+	async with _unstable_source_download_lock:
+		return await run_download_with_retries(download_func, url, **kwargs)
+
+
 async def delete_message_safely(message: Message | None):
 	if not message:
 		return
@@ -311,7 +343,7 @@ async def download_video(
 
 	try:
 		try:
-			downloaded_video = await run_download_in_thread(
+			downloaded_video = await run_download_queued(
 				download_video_util,
 				url,
 				max_height=max_height,
@@ -356,7 +388,7 @@ async def download_audio(url: str, message: Message, status_message: Message | N
 
 	try:
 		try:
-			downloaded_audio = await run_download_in_thread(download_audio_util, url)
+			downloaded_audio = await run_download_queued(download_audio_util, url)
 		except DownloadError:
 			logger.exception("yt-dlp failed to download audio: %s", url)
 			await message.answer(messages["DOWNLOAD_FAILED"])
