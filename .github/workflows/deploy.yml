@@ -51,7 +51,6 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           password: ${{ secrets.VPS_PASSWORD }}
-          script_stop: true
           script: |
             set -eu
 
@@ -79,22 +78,22 @@ jobs:
 
             /root/.local/bin/uv sync --locked
 
-            cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<SERVICE
-            [Unit]
-            Description=Download Video Bot
-            After=network.target
-
-            [Service]
-            WorkingDirectory=${APP_DIR}
-            EnvironmentFile=${APP_DIR}/.env
-            ExecStart=/root/.local/bin/uv run python -m bot
-            Restart=always
-            RestartSec=5
-            User=root
-
-            [Install]
-            WantedBy=multi-user.target
-            SERVICE
+            {
+              printf '%s\n' '[Unit]'
+              printf '%s\n' 'Description=Download Video Bot'
+              printf '%s\n' 'After=network.target'
+              printf '%s\n' ''
+              printf '%s\n' '[Service]'
+              printf '%s\n' "WorkingDirectory=${APP_DIR}"
+              printf '%s\n' "EnvironmentFile=${APP_DIR}/.env"
+              printf '%s\n' 'ExecStart=/root/.local/bin/uv run python -m bot'
+              printf '%s\n' 'Restart=always'
+              printf '%s\n' 'RestartSec=5'
+              printf '%s\n' 'User=root'
+              printf '%s\n' ''
+              printf '%s\n' '[Install]'
+              printf '%s\n' 'WantedBy=multi-user.target'
+            } > "/etc/systemd/system/${SERVICE_NAME}.service"
 
             systemctl daemon-reload
             systemctl enable "$SERVICE_NAME"
