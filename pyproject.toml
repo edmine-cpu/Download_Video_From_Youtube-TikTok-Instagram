@@ -1,0 +1,11 @@
+[project]
+name = "downloaderbyurl"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiogram>=3.28.2",
+    "pydantic-settings>=2.14.1",
+    "yt-dlp[default]>=2026.6.9",
+]
