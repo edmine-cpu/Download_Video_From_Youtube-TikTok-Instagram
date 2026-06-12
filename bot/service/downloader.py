@@ -1,5 +1,6 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
 from time import monotonic
@@ -49,6 +50,11 @@ async def choose_download_format(url: str | None, message: Message):
 		await message.answer(messages["VALIDATION_ERROR"])
 		return
 
+	if not is_youtube_url(url):
+		status_message = await message.answer(messages["DOWNLOAD_STARTED"])
+		await download_video(url, message, status_message)
+		return
+
 	request_id = uuid4().hex
 	expires_at = monotonic() + DOWNLOAD_URL_TTL_SECONDS
 	_download_urls[request_id] = PendingDownload(url=url, expires_at=expires_at)
@@ -86,10 +92,10 @@ async def download_by_format(callback: CallbackQuery):
 	await message.edit_text(messages["DOWNLOAD_STARTED"])
 
 	if format_type == "mp3":
-		await download_audio(url, message)
+		await download_audio(url, message, message)
 		return
 
-	await download_video(url, message)
+	await download_video(url, message, message)
 
 
 def create_format_keyboard(request_id: str, url: str) -> InlineKeyboardMarkup:
@@ -164,41 +170,56 @@ async def run_download_in_thread(download_func, url: str):
 	)
 
 
-async def download_video(url: str, message: Message):
+async def delete_message_safely(message: Message | None):
+	if not message:
+		return
+
+	with suppress(Exception):
+		await message.delete()
+
+
+async def download_video(url: str, message: Message, status_message: Message | None = None):
 	if not validators.url(url):
 		await message.answer(messages["VALIDATION_ERROR"])
 		return
 
-	downloaded_video = await run_download_in_thread(download_video_util, url)
-	async with TempVideo(downloaded_video.path) as path:
-		video = FSInputFile(path)
-		await message.answer_video(
-			video,
-			duration=downloaded_video.duration,
-			width=downloaded_video.width,
-			height=downloaded_video.height,
-			supports_streaming=True,
-		)
+	try:
+		downloaded_video = await run_download_in_thread(download_video_util, url)
+		async with TempVideo(downloaded_video.path) as path:
+			video = FSInputFile(path)
+			await message.answer_video(
+				video,
+				duration=downloaded_video.duration,
+				width=downloaded_video.width,
+				height=downloaded_video.height,
+				supports_streaming=True,
+			)
+	finally:
+		await delete_message_safely(status_message)
 
 
-async def download_audio(url: str, message: Message):
+async def download_audio(url: str, message: Message, status_message: Message | None = None):
 	if not validators.url(url):
 		await message.answer(messages["VALIDATION_ERROR"])
 		return
 
 	if not is_youtube_url(url):
 		await message.answer(messages["YOUTUBE_MP3_ONLY"])
+		await delete_message_safely(status_message)
 		return
 
-	downloaded_audio = await run_download_in_thread(download_audio_util, url)
-	async with TempVideo(downloaded_audio.path) as path:
-		if path.stat().st_size > TELEGRAM_AUDIO_MAX_BYTES:
-			await message.answer(messages["AUDIO_TOO_LARGE"])
-			return
+	try:
+		downloaded_audio = await run_download_in_thread(download_audio_util, url)
+		async with TempVideo(downloaded_audio.path) as path:
+			if path.stat().st_size > TELEGRAM_AUDIO_MAX_BYTES:
+				await message.answer(messages["AUDIO_TOO_LARGE"])
+				return
 
-		audio = FSInputFile(path)
-		await message.answer_audio(
-			audio,
-			duration=downloaded_audio.duration,
-			title=downloaded_audio.title,
-		)
+			audio = FSInputFile(path)
+			await message.answer_audio(
+				audio,
+				duration=downloaded_audio.duration,
+				title=downloaded_audio.title,
+			)
+	finally:
+		await delete_message_safely(status_message)
